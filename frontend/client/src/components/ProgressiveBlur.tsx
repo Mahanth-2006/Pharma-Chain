@@ -1,0 +1,1 @@
+export default function ProgressiveBlur({ className = "", direction, blurIntensity = 1 }: { className?: string; direction: "left" | "right"; blurIntensity?: number }) { return <div aria-hidden="true" className={`progressive-blur progressive-blur-${direction} ${className}`} style={{ opacity: Math.min(1, Math.max(.35, blurIntensity)) }} />; }

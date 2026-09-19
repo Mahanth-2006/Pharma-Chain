@@ -1,0 +1,2 @@
+import type { ReactNode } from "react";
+export default function TextEffect({ children, className = "", delay = 0, preset = "rise" }: { children: ReactNode; className?: string; delay?: number; preset?: "rise" | "blur" }) { const text = typeof children === "string" ? children : String(children); return <span className={`text-effect text-effect-${preset} ${className}`} aria-label={text}>{Array.from(text).map((char, index) => <span key={`${char}-${index}`} style={{ animationDelay: `${delay + index * .025}s` }}>{char === " " ? "\u00a0" : char}</span>)}</span>; }
