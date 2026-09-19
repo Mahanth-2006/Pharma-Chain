@@ -1,0 +1,3 @@
+import type { CSSProperties, ReactNode } from "react";
+export default function InfiniteSlider({ children, gap = 24, reverse = false, className = "", style }: { children: ReactNode; gap?: number; reverse?: boolean; className?: string; style?: CSSProperties }) { return <div className={`infinite-slider ${className}`} aria-label="Pharma network companies"><div className={`infinite-slider-track ${reverse ? "reverse" : ""}`} style={{ gap, ...style }}>{children}{children}</div></div>; }
+export function PharmaLogo({ name, src }: { name: string; src: string }) { return <div className="pharma-logo" aria-label={name}><img src={src} alt={`${name} logo`} /></div>; }
