@@ -65,17 +65,56 @@ def create_access_token(data):
     )
 
 
+from fastapi import Request
+
 @router.post("/login")
-def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
+async def login(
+    request: Request,
     db: Session = Depends(get_db)
 ):
+    username = None
+    password = None
 
-    user = authenticate_user(
-        db,
-        form_data.username,
-        form_data.password
-    )
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            username = body.get("username") or body.get("email")
+            password = body.get("password")
+        except Exception:
+            pass
+    else:
+        try:
+            form = await request.form()
+            username = form.get("username")
+            password = form.get("password")
+        except Exception:
+            pass
+
+    if not username or not password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username and password are required."
+        )
+
+    # Resolve email alias to canonical actor if needed
+    clean_user = username.strip().lower()
+    if clean_user in ["manufacturer@demo.pharmachain.test", "manufacturer@pharmachain.test"]:
+        lookup_name = "manu_a"
+    elif clean_user in ["distributor@demo.pharmachain.test", "distributor@pharmachain.test"]:
+        lookup_name = "dist_a"
+    elif clean_user in ["pharmacy@demo.pharmachain.test", "hospital@pharmachain.test", "pharmacy@pharmachain.test"]:
+        lookup_name = "hosp_a"
+    elif "@" in clean_user:
+        lookup_name = clean_user.split("@")[0]
+    else:
+        lookup_name = clean_user
+
+    user = authenticate_user(db, lookup_name, password)
+
+    if not user:
+        # Fallback check direct username
+        user = authenticate_user(db, clean_user, password)
 
     if not user:
         raise HTTPException(
@@ -92,8 +131,16 @@ def login(
 
     return {
         "access_token": token,
-        "token_type": "bearer"
+        "token": token,
+        "token_type": "bearer",
+        "user": {
+            "name": user.name,
+            "username": user.username,
+            "email": f"{user.username}@pharmachain.test",
+            "role": "pharmacy" if user.role == "hospital" else user.role
+        }
     }
+
 
 
 def get_current_user(

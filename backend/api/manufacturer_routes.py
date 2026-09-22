@@ -106,7 +106,8 @@ def mint_batch(
     )
 
     return {
-        "message": "Batch minted successfully.",
+        "success": True,
+        "message": "Medicine batch successfully minted to the blockchain.",
         "batch_id": request.batch_id,
         "block_height": new_block.index,
         "block_hash": new_block.hash,
