@@ -4,7 +4,8 @@ models.py
 Database models for Pharma-Chain.
 """
 
-from sqlalchemy import Column, Date, Float, Integer, String, Text
+from datetime import datetime
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, String, Text
 
 from db.database import Base
 
@@ -48,3 +49,19 @@ class BlockchainSnapshot(Base):
     timestamp = Column(Float, nullable=False)
     transactions = Column(Text, nullable=False)
     batch_id = Column(String, nullable=True)
+
+
+class BatchVerification(Base):
+    """
+    Stores 10-digit proof-of-transaction verification codes.
+    - stage 'distribute': Generated upon minting, required by distributor to verify and seal custody.
+    - stage 'purchase': Generated upon distribution, required by hospital/pharmacy to verify and finalize receipt.
+    """
+    __tablename__ = "batch_verifications"
+
+    id = Column(Integer, primary_key=True)
+    batch_id = Column(String, nullable=False, index=True)
+    stage = Column(String, nullable=False)
+    code = Column(String(10), nullable=False)
+    is_used = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

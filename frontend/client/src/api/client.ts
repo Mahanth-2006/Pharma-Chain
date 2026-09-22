@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8001/api";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 export type Role = "manufacturer" | "distributor" | "pharmacy";
 export type ApiOptions = RequestInit & { token?: string };
@@ -56,13 +56,21 @@ export const api = {
         previousHash: string;
         validator: string;
         timestamp: number;
+        verification_code: string;
       }>("/batches/mint", {
         method: "POST",
         body: JSON.stringify(payload),
         token,
       }),
-    addDistribution: (payload: Record<string, unknown>, token?: string) =>
-      request<{ success: boolean; message: string; batchId: string; blockHeight: number; blockHash: string }>(
+    addDistribution: (payload: { batch_id: string; verification_code: string; price?: number }, token?: string) =>
+      request<{
+        success: boolean;
+        message: string;
+        batchId: string;
+        blockHeight: number;
+        blockHash: string;
+        hospital_verification_code: string;
+      }>(
         "/batches/distribution",
         {
           method: "POST",
@@ -70,7 +78,7 @@ export const api = {
           token,
         }
       ),
-    addPurchase: (payload: Record<string, unknown>, token?: string) =>
+    addPurchase: (payload: { batch_id: string; verification_code: string; price?: number }, token?: string) =>
       request<{ success: boolean; message: string; batchId: string; blockHeight: number; blockHash: string }>(
         "/batches/purchase",
         {
@@ -78,6 +86,11 @@ export const api = {
           body: JSON.stringify(payload),
           token,
         }
+      ),
+    getVerificationCode: (batchId: string, token?: string) =>
+      request<{ batch_id: string; code: string | null; target_stage: string; current_stage: string; is_final: boolean }>(
+        `/batches/${encodeURIComponent(batchId)}/verification-code`,
+        { token }
       ),
     history: (batchId: string, token?: string) =>
       request<any>(`/batches/${encodeURIComponent(batchId)}/history`, { token }),

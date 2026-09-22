@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Copy,
   Hash,
+  Key,
   Layers,
   Plus,
   RefreshCw,
@@ -117,6 +118,32 @@ export default function ManufacturerDashboard() {
   const [traceError, setTraceError] = useState<string | null>(null);
   const [batchDetail, setBatchDetail] = useState<BatchTraceData | null>(null);
 
+  // 10-Digit Verification Code Modal State
+  const [codeModalData, setCodeModalData] = useState<{
+    batchId: string;
+    code: string;
+    title: string;
+    description: string;
+  } | null>(null);
+
+  const handleViewCode = async (bId: string) => {
+    try {
+      const res = await api.batches.getVerificationCode(bId);
+      if (res && res.code) {
+        setCodeModalData({
+          batchId: bId,
+          code: res.code,
+          title: "Proof-of-Transaction Code",
+          description: "Provide this 10-digit code to Distributor A to authorize custody transfer.",
+        });
+      } else {
+        alert(`No active verification code for batch ${bId}. (Stage: ${res.current_stage || "unknown"})`);
+      }
+    } catch (e: any) {
+      alert(e?.message || "Could not retrieve verification code.");
+    }
+  };
+
   // Load Blockchain and Batches
   const loadData = async () => {
     setLoadingChain(true);
@@ -203,6 +230,16 @@ export default function ManufacturerDashboard() {
       setSuccessMessage(
         result.message || "Medicine batch successfully minted to the blockchain."
       );
+
+      if (result.verification_code) {
+        setCodeModalData({
+          batchId: trimmedId,
+          code: result.verification_code,
+          title: "Batch Minted — 10-Digit Distributor Verification Code",
+          description: "Provide this 10-digit proof-of-transaction code to Distributor A to authorize custody transfer.",
+        });
+      }
+
       setBatchId("");
       setMedicineName("");
       setDosage("");
@@ -695,7 +732,7 @@ export default function ManufacturerDashboard() {
                   <span>
                     <span className="badge">{b.stage || "minted"}</span>
                   </span>
-                  <span>
+                  <span style={{ display: "flex", gap: 6 }}>
                     <button
                       type="button"
                       onClick={() => handleOpenTrace(b.batch_id)}
@@ -704,6 +741,17 @@ export default function ManufacturerDashboard() {
                     >
                       Trace
                     </button>
+                    {b.stage === "mint" && (
+                      <button
+                        type="button"
+                        onClick={() => handleViewCode(b.batch_id)}
+                        className="btn btn-primary"
+                        style={{ minHeight: 28, padding: "0 8px", fontSize: 11 }}
+                        title="View 10-Digit Distributor Verification Code"
+                      >
+                        <Key size={11} /> Code
+                      </button>
+                    )}
                   </span>
                 </div>
               ))}
@@ -711,6 +759,124 @@ export default function ManufacturerDashboard() {
           </LiquidGlassPanel>
         )}
       </div>
+
+      {/* 10-DIGIT VERIFICATION CODE POPUP MODAL */}
+      {codeModalData && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            display: "grid",
+            placeItems: "center",
+            padding: 20,
+            background: "rgba(0, 5, 6, 0.85)",
+            backdropFilter: "blur(10px)",
+          }}
+        >
+          <LiquidGlassPanel
+            className="fade-up"
+            style={{ maxWidth: 520, width: "100%", padding: 28 } as any}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                borderBottom: "1px solid rgba(159, 208, 202, 0.12)",
+                paddingBottom: 14,
+                marginBottom: 20,
+              }}
+            >
+              <div>
+                <div className="eyebrow" style={{ color: "#7ef3cd" }}>
+                  <Key size={13} style={{ verticalAlign: "-2px" }} /> PROOF OF TRANSACTION
+                </div>
+                <h2 style={{ margin: "6px 0 0", fontSize: 18 }}>
+                  {codeModalData.title}
+                </h2>
+              </div>
+              <button
+                className="icon-btn"
+                onClick={() => setCodeModalData(null)}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 12, color: "#91a6a4", marginBottom: 6 }}>
+                BATCH IDENTIFIER
+              </div>
+              <div
+                className="mono"
+                style={{ fontSize: 16, fontWeight: 700, color: "#edf4f3" }}
+              >
+                {codeModalData.batchId}
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "rgba(126, 243, 205, 0.08)",
+                border: "1px solid rgba(126, 243, 205, 0.3)",
+                borderRadius: 12,
+                padding: "20px",
+                textAlign: "center",
+                marginBottom: 20,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  color: "#7ef3cd",
+                  fontWeight: 600,
+                  marginBottom: 10,
+                }}
+              >
+                10-Digit Verification Code
+              </div>
+              <div
+                className="mono"
+                style={{
+                  fontSize: 32,
+                  letterSpacing: "0.18em",
+                  fontWeight: 800,
+                  color: "#7ef3cd",
+                  userSelect: "all",
+                }}
+              >
+                {codeModalData.code}
+              </div>
+            </div>
+
+            <p style={{ fontSize: 12, color: "#91a6a4", lineHeight: 1.6, margin: "0 0 20px" }}>
+              {codeModalData.description}
+            </p>
+
+            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setCodeModalData(null)}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => copyToClipboard(codeModalData.code)}
+              >
+                <Copy size={14} />
+                {copiedHash === codeModalData.code ? "Copied to Clipboard!" : "Copy 10-Digit Code"}
+              </button>
+            </div>
+          </LiquidGlassPanel>
+        </div>
+      )}
 
       {/* MINT NEW BATCH MODAL */}
       {modalOpen && (

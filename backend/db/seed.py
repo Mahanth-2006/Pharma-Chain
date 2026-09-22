@@ -5,8 +5,14 @@ Seeds canonical demo participants with custom passwords and 20 realistic demo me
 """
 
 import os
+import sys
 from datetime import date
 from pathlib import Path
+
+# Add backend directory to sys.path when running as a standalone script
+backend_dir = str(Path(__file__).resolve().parent.parent)
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 from passlib.context import CryptContext
 
@@ -46,8 +52,7 @@ def get_or_create_key_pair(filename):
 
 
 def seed():
-    # Reset tables in development
-    Base.metadata.drop_all(bind=engine)
+    # Ensure tables exist without ever dropping existing data or blocks
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
@@ -62,59 +67,30 @@ def seed():
     for name, role, username, password, key_file in participants:
         _, public = get_or_create_key_pair(key_file)
 
-        db.add(
-            Participant(
-                name=name,
-                role=role,
-                username=username,
-                password_hash=pwd.hash(password),
-                public_key=public
+        existing = db.query(Participant).filter(Participant.username == username).first()
+        if not existing:
+            db.add(
+                Participant(
+                    name=name,
+                    role=role,
+                    username=username,
+                    password_hash=pwd.hash(password),
+                    public_key=public
+                )
             )
-        )
+        else:
+            existing.name = name
+            existing.role = role
+            existing.password_hash = pwd.hash(password)
+            existing.public_key = public
 
-    # Exactly 20 realistic demo medicine batches (B001 to B020)
-    demo_batches = [
-        ("B001", "Paracetamol 500mg", "Manufacturer A", date(2026, 1, 10), date(2028, 1, 10), "Paracetamol 500mg", "500mg", "10x10 Tablets", "Analgesic / Antipyretic"),
-        ("B002", "Amoxicillin 250mg", "Manufacturer A", date(2026, 1, 15), date(2028, 1, 15), "Amoxicillin Trihydrate 250mg", "250mg", "10 Capsules", "Antibiotic"),
-        ("B003", "Ibuprofen 400mg", "Manufacturer A", date(2026, 2, 1), date(2028, 2, 1), "Ibuprofen 400mg", "400mg", "15 Tablets", "NSAID"),
-        ("B004", "Metformin 500mg", "Manufacturer A", date(2026, 2, 5), date(2028, 2, 5), "Metformin Hydrochloride 500mg", "500mg", "20 Tablets", "Anti-diabetic"),
-        ("B005", "Atorvastatin 10mg", "Manufacturer A", date(2026, 2, 10), date(2028, 2, 10), "Atorvastatin Calcium 10mg", "10mg", "10 Tablets", "Lipid-lowering"),
-        ("B006", "Azithromycin 500mg", "Manufacturer A", date(2026, 2, 15), date(2028, 2, 15), "Azithromycin Dihydrate 500mg", "500mg", "3 Tablets", "Antibiotic / Macrolide"),
-        ("B007", "Omeprazole 20mg", "Manufacturer A", date(2026, 2, 20), date(2028, 2, 20), "Omeprazole Magnesium 20mg", "20mg", "14 Capsules", "Proton Pump Inhibitor"),
-        ("B008", "Ciprofloxacin 500mg", "Manufacturer A", date(2026, 2, 25), date(2028, 2, 25), "Ciprofloxacin Hydrochloride 500mg", "500mg", "10 Tablets", "Fluoroquinolone"),
-        ("B009", "Cetirizine 10mg", "Manufacturer A", date(2026, 3, 1), date(2028, 3, 1), "Cetirizine Hydrochloride 10mg", "10mg", "10 Tablets", "Antihistamine"),
-        ("B010", "Pantoprazole 40mg", "Manufacturer A", date(2026, 3, 5), date(2028, 3, 5), "Pantoprazole Sodium 40mg", "40mg", "10 Tablets", "Proton Pump Inhibitor"),
-        ("B011", "Losartan 50mg", "Manufacturer A", date(2026, 3, 10), date(2028, 3, 10), "Losartan Potassium 50mg", "50mg", "15 Tablets", "Antihypertensive"),
-        ("B012", "Amlodipine 5mg", "Manufacturer A", date(2026, 3, 15), date(2028, 3, 15), "Amlodipine Besylate 5mg", "5mg", "30 Tablets", "Calcium Channel Blocker"),
-        ("B013", "Metoprolol 25mg", "Manufacturer A", date(2026, 3, 20), date(2028, 3, 20), "Metoprolol Tartrate 25mg", "25mg", "20 Tablets", "Beta Blocker"),
-        ("B014", "Doxycycline 100mg", "Manufacturer A", date(2026, 3, 25), date(2028, 3, 25), "Doxycycline Hyclate 100mg", "100mg", "10 Capsules", "Tetracycline Antibiotic"),
-        ("B015", "Clopidogrel 75mg", "Manufacturer A", date(2026, 4, 1), date(2028, 4, 1), "Clopidogrel Bisulfate 75mg", "75mg", "10 Tablets", "Antiplatelet"),
-        ("B016", "Montelukast 10mg", "Manufacturer A", date(2026, 4, 5), date(2028, 4, 5), "Montelukast Sodium 10mg", "10mg", "15 Tablets", "Leukotriene Receptor Antagonist"),
-        ("B017", "Gabapentin 300mg", "Manufacturer A", date(2026, 4, 10), date(2028, 4, 10), "Gabapentin 300mg", "300mg", "10 Capsules", "Anticonvulsant"),
-        ("B018", "Levothyroxine 50mcg", "Manufacturer A", date(2026, 4, 15), date(2028, 4, 15), "Levothyroxine Sodium 50mcg", "50mcg", "30 Tablets", "Thyroid Hormone"),
-        ("B019", "Diclofenac 50mg", "Manufacturer A", date(2026, 4, 20), date(2028, 4, 20), "Diclofenac Potassium 50mg", "50mg", "10 Tablets", "NSAID"),
-        ("B020", "Amoxicillin + Clavulanate", "Manufacturer A", date(2026, 4, 25), date(2028, 4, 25), "Amoxicillin 500mg + Clavulanate 125mg", "625mg", "10 Tablets", "Antibiotic"),
-    ]
-
-    for batch_id, drug, mfg, mfg_date, exp_date, comp, dosage, pack, thermo in demo_batches:
-        db.add(
-            MedicineMetadata(
-                batch_id=batch_id,
-                drug_name=drug,
-                manufacturer=mfg,
-                manufacturing_date=mfg_date,
-                expiry_date=exp_date,
-                composition=comp,
-                dosage=dosage,
-                pack_size=pack,
-                therapeutic_class=thermo,
-            )
-        )
+    # Remove all leftover fake/demo batches (B001-B020) so only user-created data exists
+    db.query(MedicineMetadata).filter(MedicineMetadata.batch_id.like("B0%")).delete(synchronize_session=False)
 
     db.commit()
     db.close()
 
-    print("Database seeded successfully with 3 participants and 20 medicine batches (B001 - B020).")
+    print("Participants verified and updated. Cleaned demo data; only user batches will be stored.")
     print(f"RSA Keys directory: {KEYS_DIR}")
 
 

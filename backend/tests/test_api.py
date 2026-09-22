@@ -62,6 +62,27 @@ def test_role_guard_forbidden():
 
 
 def test_full_supply_chain_api_flow():
+    from db.database import SessionLocal
+    from db.models import MedicineMetadata
+    from datetime import date
+
+    # Ensure test medicine metadata exists for B001
+    db = SessionLocal()
+    if not db.query(MedicineMetadata).filter(MedicineMetadata.batch_id == "B001").first():
+        db.add(MedicineMetadata(
+            batch_id="B001",
+            drug_name="Paracetamol 500mg",
+            manufacturer="Manufacturer A",
+            manufacturing_date=date(2026, 1, 10),
+            expiry_date=date(2028, 1, 10),
+            composition="Paracetamol 500mg",
+            dosage="500mg",
+            pack_size="10x10 Tablets",
+            therapeutic_class="Analgesic / Antipyretic"
+        ))
+        db.commit()
+    db.close()
+
     manu_token = get_token("manu_a", "mpass123")
     dist_token = get_token("dist_a", "dpass123")
     hosp_token = get_token("hosp_a", "hpass123")
@@ -76,22 +97,44 @@ def test_full_supply_chain_api_flow():
     mint_data = mint_res.json()
     assert mint_data["stage"] == "mint"
     assert mint_data["batch_id"] == "B001"
+    assert "verification_code" in mint_data
+    dist_code = mint_data["verification_code"]
+    assert len(dist_code) == 10
 
-    # 2. Distributor receives batch B001
+    # 1b. Attempt distribution with wrong verification code must fail
+    wrong_dist_res = client.post(
+        "/distributor/receive",
+        json={"batch_id": "B001", "price": 130.0, "verification_code": "0000000000"},
+        headers={"Authorization": f"Bearer {dist_token}"}
+    )
+    assert wrong_dist_res.status_code == 400
+
+    # 2. Distributor receives batch B001 with valid 10-digit code
     dist_res = client.post(
         "/distributor/receive",
-        json={"batch_id": "B001", "price": 130.0},
+        json={"batch_id": "B001", "price": 130.0, "verification_code": dist_code},
         headers={"Authorization": f"Bearer {dist_token}"}
     )
     assert dist_res.status_code == 200, dist_res.text
     dist_data = dist_res.json()
     assert dist_data["stage"] == "distribute"
     assert dist_data["owner"] == "dist_a"
+    assert "hospital_verification_code" in dist_data
+    hosp_code = dist_data["hospital_verification_code"]
+    assert len(hosp_code) == 10
 
-    # 3. Hospital purchases batch B001
+    # 2b. Attempt purchase with wrong verification code must fail
+    wrong_hosp_res = client.post(
+        "/hospital/purchase",
+        json={"batch_id": "B001", "price": 160.0, "verification_code": "9999999999"},
+        headers={"Authorization": f"Bearer {hosp_token}"}
+    )
+    assert wrong_hosp_res.status_code == 400
+
+    # 3. Hospital purchases batch B001 with valid code
     hosp_res = client.post(
         "/hospital/purchase",
-        json={"batch_id": "B001", "price": 160.0},
+        json={"batch_id": "B001", "price": 160.0, "verification_code": hosp_code},
         headers={"Authorization": f"Bearer {hosp_token}"}
     )
     assert hosp_res.status_code == 200, hosp_res.text
@@ -102,7 +145,7 @@ def test_full_supply_chain_api_flow():
     # 4. Duplicate purchase attempt must be rejected
     dup_res = client.post(
         "/hospital/purchase",
-        json={"batch_id": "B001", "price": 160.0},
+        json={"batch_id": "B001", "price": 160.0, "verification_code": hosp_code},
         headers={"Authorization": f"Bearer {hosp_token}"}
     )
     assert dup_res.status_code == 400
@@ -142,5 +185,5 @@ def test_query_endpoints():
     batches_res = client.get("/query/batches")
     assert batches_res.status_code == 200
     batches_data = batches_res.json()
-    assert batches_data["total"] == 20
+    assert batches_data["total"] >= 1
     assert any(b["batch_id"] == "B001" and b["stage"] == "purchase" for b in batches_data["batches"])

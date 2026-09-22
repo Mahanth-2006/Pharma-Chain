@@ -1,4 +1,5 @@
 from pathlib import Path
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +14,7 @@ from blockchain.transaction import (
     validate_stage_order,
 )
 from db.database import get_db
-from db.models import MedicineMetadata
+from db.models import BatchVerification, MedicineMetadata
 from middleware.role_guard import require_role
 
 router = APIRouter(
@@ -25,6 +26,7 @@ router = APIRouter(
 class ReceiveRequest(BaseModel):
     batch_id: str
     price: Optional[float] = None
+    verification_code: Optional[str] = None
 
 
 @router.post("/receive")
@@ -63,6 +65,25 @@ def receive_batch(
         raise HTTPException(
             status_code=400,
             detail=f"Batch {request.batch_id} has already been received and distributed."
+        )
+
+    # Validate 10-digit proof of transaction verification code
+    if not request.verification_code:
+        raise HTTPException(
+            status_code=400,
+            detail="10-digit proof-of-transaction verification code is required."
+        )
+
+    v_record = db.query(BatchVerification).filter(
+        BatchVerification.batch_id == request.batch_id,
+        BatchVerification.stage == "distribute",
+        BatchVerification.is_used == False
+    ).order_by(BatchVerification.id.desc()).first()
+
+    if not v_record or v_record.code != request.verification_code.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid 10-digit verification code. Custody transfer rejected."
         )
 
     # Determine transfer price
@@ -127,6 +148,21 @@ def receive_batch(
         db=db
     )
 
+    # Mark distributor verification code as consumed
+    v_record.is_used = True
+
+    # Generate next 10-digit code for hospital
+    hospital_code = str(secrets.randbelow(9000000000) + 1000000000)
+    db.add(
+        BatchVerification(
+            batch_id=request.batch_id,
+            stage="purchase",
+            code=hospital_code,
+            is_used=False
+        )
+    )
+    db.commit()
+
     return {
         "message": "Batch received and distributed successfully.",
         "batch_id": request.batch_id,
@@ -135,5 +171,6 @@ def receive_batch(
         "validator": new_block.validator,
         "stage": "distribute",
         "owner": user.username,
-        "price": transfer_price
+        "price": transfer_price,
+        "hospital_verification_code": hospital_code
     }

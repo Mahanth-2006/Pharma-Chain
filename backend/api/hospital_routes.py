@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -12,7 +13,7 @@ from blockchain.transaction import (
     validate_stage_order,
 )
 from db.database import get_db
-from db.models import MedicineMetadata
+from db.models import BatchVerification, MedicineMetadata
 from middleware.role_guard import require_role
 
 router = APIRouter(
@@ -23,7 +24,8 @@ router = APIRouter(
 
 class PurchaseRequest(BaseModel):
     batch_id: str
-    price: float
+    price: float = 150.0
+    verification_code: Optional[str] = None
 
 
 @router.post("/purchase")
@@ -62,6 +64,25 @@ def purchase_batch(
         raise HTTPException(
             status_code=400,
             detail=f"Duplicate purchase attempt rejected. Batch {request.batch_id} has already been purchased."
+        )
+
+    # Validate 10-digit proof of transaction verification code from Distributor
+    if not request.verification_code:
+        raise HTTPException(
+            status_code=400,
+            detail="10-digit proof-of-transaction verification code from Distributor is required."
+        )
+
+    v_record = db.query(BatchVerification).filter(
+        BatchVerification.batch_id == request.batch_id,
+        BatchVerification.stage == "purchase",
+        BatchVerification.is_used == False
+    ).order_by(BatchVerification.id.desc()).first()
+
+    if not v_record or v_record.code != request.verification_code.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid 10-digit verification code from Distributor. Purchase rejected."
         )
 
     # Load hospital's private key for signing
@@ -120,6 +141,10 @@ def purchase_batch(
         [tx],
         db=db
     )
+
+    # Mark hospital verification code as consumed
+    v_record.is_used = True
+    db.commit()
 
     return {
         "message": "Batch purchased by hospital successfully.",

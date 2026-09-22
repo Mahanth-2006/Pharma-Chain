@@ -9,11 +9,15 @@ from api.hospital_routes import router as hospital_router
 from api.query_routes import router as query_router
 from api.frontend_compat_routes import router as frontend_compat_router
 from blockchain.chain import blockchain
-from db.database import SessionLocal
+from db.database import Base, SessionLocal, engine
+import db.models
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure database schema is ready without dropping tables
+    Base.metadata.create_all(bind=engine)
+
     # Startup: Restore blockchain from database persistence
     db = SessionLocal()
     try:

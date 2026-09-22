@@ -1,4 +1,5 @@
 from pathlib import Path
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -12,7 +13,7 @@ from blockchain.transaction import (
     validate_stage_order,
 )
 from db.database import get_db
-from db.models import MedicineMetadata
+from db.models import BatchVerification, MedicineMetadata
 from middleware.role_guard import require_role
 
 router = APIRouter(
@@ -105,6 +106,18 @@ def mint_batch(
         db=db
     )
 
+    # Generate 10-digit code for distributor handoff
+    distributor_code = str(secrets.randbelow(9000000000) + 1000000000)
+    db.add(
+        BatchVerification(
+            batch_id=request.batch_id,
+            stage="distribute",
+            code=distributor_code,
+            is_used=False
+        )
+    )
+    db.commit()
+
     return {
         "success": True,
         "message": "Medicine batch successfully minted to the blockchain.",
@@ -114,4 +127,5 @@ def mint_batch(
         "validator": new_block.validator,
         "stage": "mint",
         "price": request.price,
+        "verification_code": distributor_code,
     }

@@ -155,6 +155,13 @@ class Blockchain:
                 )
                 return False
 
+            # Verify Proof of Authority consensus validator turn
+            if not self.consensus.validate_validator(current.index, current.validator):
+                print(
+                    f"Consensus fault in Block {current.index}: invalid validator {current.validator}."
+                )
+                return False
+
         return True
 
     def save_block_to_db(self, db, block: Block):

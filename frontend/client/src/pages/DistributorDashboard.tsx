@@ -1,6 +1,875 @@
-import { ArrowRight, Search, Truck } from "lucide-react";
-import { useState } from "react";
+import {
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Copy,
+  Hash,
+  Key,
+  Layers,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Truck,
+  X,
+  Clock,
+  User,
+  FileText,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import LiquidGlassPanel from "../components/LiquidGlassPanel";
 import DashboardLayout from "./DashboardLayout";
-export default function DistributorDashboard() { const [saved, setSaved] = useState(false); const submit = async (e: React.FormEvent) => { e.preventDefault(); await api.batches.addDistribution({ batchId: "PC-2024-08-0194" }); setSaved(true); }; return <DashboardLayout eyebrow="distributor console" title={<>Move the chain<br /><em>without gaps.</em></>} description="Reconcile inbound custody, capture cold-chain conditions, and keep every route event visible to the next operator." action={<button className="btn btn-ghost"><Search size={15} /> Find a batch</button>}><div className="grid grid-2 fade-up delay-1"><LiquidGlassPanel hover><div className="stat-label">Awaiting handoff</div><div className="stat-value">38</div><div className="stat-meta">12 due within 4h</div></LiquidGlassPanel><LiquidGlassPanel hover><div className="stat-label">In transit</div><div className="stat-value">214</div><div className="stat-meta good">98.8% on route</div></LiquidGlassPanel></div><div style={{ marginTop: 16 }}><LiquidGlassPanel className="fade-up delay-2"><div className="eyebrow"><Truck size={13} /> active custody</div><h2 style={{ margin: "14px 0 4px", fontSize: 20 }}>Add distribution details</h2><p style={{ margin: "0 0 20px", color: "#91a6a4", fontSize: 11 }}>Attach the physical movement to the chain record.</p>{saved && <div className="badge" style={{ marginBottom: 14 }}>Distribution event sealed · demo mode</div>}<form className="form-grid" onSubmit={submit}><div className="input-wrap full"><label>Batch ID</label><input className="input" defaultValue="PC-2024-08-0194" /></div><div className="input-wrap"><label>Dispatch location</label><input className="input" defaultValue="Bengaluru Plant IN-04" /></div><div className="input-wrap"><label>Receiving location</label><input className="input" defaultValue="Chennai Hub TN-02" /></div><div className="input-wrap"><label>Temperature (°C)</label><input className="input" defaultValue="3.8" /></div><div className="input-wrap"><label>Vehicle / seal ID</label><input className="input" defaultValue="TRK-818 · SEAL-40092" /></div><div className="form-actions full"><button className="btn btn-primary">Seal handoff <ArrowRight size={14} /></button></div></form></LiquidGlassPanel></div></DashboardLayout>; }
+
+interface BlockTransaction {
+  batch_id: string;
+  drug_name: string;
+  from_actor: string;
+  to_actor: string;
+  stage: string;
+  timestamp?: number;
+  signature?: string;
+  actor_public_key?: string;
+}
+
+interface BlockData {
+  index: number;
+  previous_hash: string;
+  timestamp: number;
+  validator: string;
+  transactions: BlockTransaction[];
+  hash: string;
+}
+
+interface BatchRecord {
+  batch_id: string;
+  drug_name: string;
+  dosage: string;
+  manufacturing_date: string;
+  expiry_date: string;
+  stage: string;
+  owner: string;
+}
+
+interface BatchTraceData {
+  batch_id: string;
+  metadata: {
+    drug_name: string;
+    manufacturer: string;
+    manufacturing_date: string;
+    expiry_date: string;
+    composition?: string;
+    dosage?: string;
+    pack_size?: string;
+    therapeutic_class?: string;
+  };
+  blockchain: {
+    current_stage: string;
+    current_owner: string;
+    is_authentic: boolean;
+    chain_verified: boolean;
+    total_transactions: number;
+    history: Array<{
+      batch_id: string;
+      drug_name: string;
+      from_actor: string;
+      to_actor: string;
+      stage: string;
+      timestamp: number;
+      signature?: string;
+      actor_public_key?: string;
+      block_index?: number;
+      block_hash?: string;
+      previous_hash?: string;
+      validator?: string;
+      block_timestamp?: number;
+    }>;
+  };
+}
+
+export default function DistributorDashboard() {
+  // Modal & Flow State
+  const [modalOpen, setModalOpen] = useState(false);
+  const [inspectBatchId, setInspectBatchId] = useState("");
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectedBatch, setInspectedBatch] = useState<BatchTraceData | null>(null);
+  const [inspectError, setInspectError] = useState<string | null>(null);
+
+  // Verification Code State
+  const [verificationCode, setVerificationCode] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [successResult, setSuccessResult] = useState<{
+    batchId: string;
+    blockHeight: number;
+    blockHash: string;
+    hospital_verification_code: string;
+  } | null>(null);
+
+  // Feedback States
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
+
+  // Blockchain Explorer State
+  const [chain, setChain] = useState<BlockData[]>([]);
+  const [chainValid, setChainValid] = useState<boolean>(true);
+  const [loadingChain, setLoadingChain] = useState<boolean>(false);
+
+  // Real Batches State
+  const [batches, setBatches] = useState<BatchRecord[]>([]);
+  const [loadingBatches, setLoadingBatches] = useState<boolean>(false);
+
+  // Trace Modal State
+  const [traceModalOpen, setTraceModalOpen] = useState(false);
+  const [selectedBatchId, setSelectedBatchId] = useState<string>("");
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [batchDetail, setBatchDetail] = useState<BatchTraceData | null>(null);
+
+  // Load Blockchain and Batches
+  const loadData = async () => {
+    setLoadingChain(true);
+    setLoadingBatches(true);
+    try {
+      const [chainRes, batchesRes] = await Promise.all([
+        api.blockchain.getChain().catch((e) => {
+          console.error("Chain fetch failed", e);
+          return null;
+        }),
+        api.batches.getAll().catch((e) => {
+          console.error("Batches fetch failed", e);
+          return null;
+        }),
+      ]);
+
+      if (chainRes) {
+        setChain(chainRes.chain || []);
+        setChainValid(chainRes.is_valid);
+      }
+      if (batchesRes) {
+        setBatches(batchesRes.batches || []);
+      }
+    } finally {
+      setLoadingChain(false);
+      setLoadingBatches(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  // Inspect Batch by ID
+  const handleInspectBatch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmedId = inspectBatchId.trim();
+    if (!trimmedId) {
+      setInspectError("Please enter a valid Batch ID.");
+      return;
+    }
+
+    setInspecting(true);
+    setInspectError(null);
+    setInspectedBatch(null);
+    setActionError(null);
+    try {
+      const data = await api.batches.getById(trimmedId);
+      setInspectedBatch(data);
+    } catch (err: any) {
+      setInspectError(err?.message || `Batch '${trimmedId}' not found on blockchain.`);
+    } finally {
+      setInspecting(false);
+    }
+  };
+
+  // Submit Verification & Receive Batch
+  const handleVerifyAndReceive = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionError(null);
+
+    const trimmedCode = verificationCode.trim();
+    if (!trimmedCode) {
+      setActionError("Please enter the 10-digit verification code provided by Manufacturer.");
+      return;
+    }
+    if (trimmedCode.length !== 10 || !/^\d{10}$/.test(trimmedCode)) {
+      setActionError("Verification code must be exactly 10 numeric digits.");
+      return;
+    }
+
+    if (!inspectedBatch) {
+      setActionError("Please inspect the batch first.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await api.batches.addDistribution({
+        batch_id: inspectedBatch.batch_id,
+        verification_code: trimmedCode,
+      });
+
+      setSuccessResult({
+        batchId: res.batchId,
+        blockHeight: res.blockHeight,
+        blockHash: res.blockHash,
+        hospital_verification_code: res.hospital_verification_code,
+      });
+
+      // Clear input
+      setVerificationCode("");
+      await loadData();
+    } catch (err: any) {
+      setActionError(err?.message || "Verification failed. Please check the 10-digit code.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Open Trace Modal
+  const handleOpenTrace = async (id: string) => {
+    if (!id) return;
+    setSelectedBatchId(id);
+    setTraceModalOpen(true);
+    setTraceLoading(true);
+    setTraceError(null);
+    setBatchDetail(null);
+    try {
+      const data = await api.batches.getById(id);
+      setBatchDetail(data);
+    } catch (err: any) {
+      setTraceError(err?.message || `Could not load history for batch ${id}`);
+    } finally {
+      setTraceLoading(false);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard?.writeText(text);
+    setCopiedHash(text);
+    setTimeout(() => setCopiedHash(null), 2000);
+  };
+
+  const formatDate = (timestamp?: number) => {
+    if (!timestamp) return "N/A";
+    const ms = timestamp > 1e11 ? timestamp : timestamp * 1000;
+    return new Date(ms).toLocaleString();
+  };
+
+  // Metrics
+  const awaitingBatches = batches.filter((b) => b.stage === "mint");
+  const distributedBatches = batches.filter((b) => b.stage === "distribute" || b.stage === "purchase");
+
+  return (
+    <DashboardLayout
+      eyebrow="DISTRIBUTOR CONSOLE"
+      title={<>Verify & Distribute <em>Medicines.</em></>}
+      description="Inspect cryptographically sealed manufacturer blocks, verify proof-of-transaction codes, and seal custody onto the immutable chain."
+      action={
+        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+          <button
+            className="btn btn-ghost"
+            onClick={loadData}
+            disabled={loadingChain}
+            title="Refresh Blockchain"
+          >
+            <RefreshCw size={14} className={loadingChain ? "animate-spin" : ""} />
+            Sync Chain
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              setModalOpen(true);
+              setSuccessResult(null);
+              setInspectedBatch(null);
+              setInspectError(null);
+              setActionError(null);
+            }}
+          >
+            <ShieldCheck size={15} /> Verify & Receive Batch
+          </button>
+        </div>
+      }
+    >
+      {/* Real Live Metrics Bar */}
+      <div className="grid grid-4 fade-up delay-1" style={{ marginBottom: 28 }}>
+        <LiquidGlassPanel hover>
+          <div className="stat-label">Total Blocks</div>
+          <div className="stat-value" style={{ color: "#7ef3cd" }}>{chain.length}</div>
+          <div className="stat-meta">Immutable chain height</div>
+        </LiquidGlassPanel>
+
+        <LiquidGlassPanel hover>
+          <div className="stat-label">Ready for Inbound</div>
+          <div className="stat-value">{awaitingBatches.length}</div>
+          <div className="stat-meta">Minted by manufacturer</div>
+        </LiquidGlassPanel>
+
+        <LiquidGlassPanel hover>
+          <div className="stat-label">Custody Sealed</div>
+          <div className="stat-value">{distributedBatches.length}</div>
+          <div className="stat-meta good">Verified & in transit</div>
+        </LiquidGlassPanel>
+
+        <LiquidGlassPanel hover>
+          <div className="stat-label">Consensus Health</div>
+          <div className="stat-value" style={{ color: chainValid ? "#7ef3cd" : "#ff7b72" }}>
+            {chainValid ? "100%" : "FAULT"}
+          </div>
+          <div className="stat-meta good">Proof of Authority</div>
+        </LiquidGlassPanel>
+      </div>
+
+      {/* LIVE BLOCKCHAIN LEDGER */}
+      <div style={{ marginBottom: 36 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 16,
+          }}
+        >
+          <div>
+            <div className="eyebrow">
+              <Layers size={12} /> Distributed Ledger
+            </div>
+            <h2 style={{ margin: "6px 0 0", fontSize: 20 }}>
+              Live Blockchain Blocks ({chain.length})
+            </h2>
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <span
+              className="badge"
+              style={{
+                borderColor: chainValid ? "rgba(126,243,205,0.4)" : "rgba(255,100,100,0.4)",
+                color: chainValid ? "#7ef3cd" : "#ff7b72",
+              }}
+            >
+              <ShieldCheck size={12} />
+              {chainValid ? "Chain Verified" : "Tamper Detected"}
+            </span>
+          </div>
+        </div>
+
+        {chain.length === 0 ? (
+          <LiquidGlassPanel>
+            <div style={{ textAlign: "center", padding: "30px 20px", color: "#91a6a4" }}>
+              No blocks found on chain.
+            </div>
+          </LiquidGlassPanel>
+        ) : (
+          <div style={{ display: "grid", gap: 12 }}>
+            {[...chain].reverse().map((block) => (
+              <LiquidGlassPanel key={block.index} className="fade-up">
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    borderBottom: "1px solid rgba(159, 208, 202, 0.08)",
+                    paddingBottom: 10,
+                    marginBottom: 12,
+                    flexWrap: "wrap",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span
+                      className="mono"
+                      style={{
+                        background: "rgba(126, 243, 205, 0.12)",
+                        color: "#7ef3cd",
+                        padding: "3px 10px",
+                        borderRadius: 6,
+                        fontWeight: 700,
+                        fontSize: 12,
+                      }}
+                    >
+                      BLOCK #{block.index}
+                    </span>
+                    {block.index === 0 && (
+                      <span className="badge">GENESIS</span>
+                    )}
+                    <span className="mono" style={{ color: "#91a6a4", fontSize: 11 }}>
+                      Validator: <strong style={{ color: "#edf4f3" }}>{block.validator}</strong>
+                    </span>
+                  </div>
+                  <div className="mono" style={{ color: "#91a6a4", fontSize: 11 }}>
+                    Timestamp: {formatDate(block.timestamp)}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 16,
+                    marginBottom: 12,
+                    fontSize: 11,
+                  }}
+                >
+                  <div style={{ background: "rgba(0,0,0,0.2)", padding: "8px 12px", borderRadius: 6 }}>
+                    <div style={{ color: "#91a6a4", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+                      <span>BLOCK HASH</span>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(block.hash)}
+                        className="icon-btn"
+                        style={{ width: 18, height: 18 }}
+                        title="Copy Hash"
+                      >
+                        <Copy size={11} />
+                      </button>
+                    </div>
+                    <div className="mono" style={{ color: "#7ef3cd", wordBreak: "break-all", fontSize: 10 }}>
+                      {block.hash}
+                    </div>
+                  </div>
+
+                  <div style={{ background: "rgba(0,0,0,0.2)", padding: "8px 12px", borderRadius: 6 }}>
+                    <div style={{ color: "#91a6a4", marginBottom: 4 }}>PREVIOUS HASH</div>
+                    <div className="mono" style={{ color: "#91a6a4", wordBreak: "break-all", fontSize: 10 }}>
+                      {block.previous_hash}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Transactions in Block */}
+                <div>
+                  <div className="stat-label" style={{ marginBottom: 8, fontSize: 10 }}>
+                    Transactions in Block ({block.transactions.length})
+                  </div>
+                  {block.transactions.length === 0 ? (
+                    <div className="mono" style={{ fontSize: 11, color: "#91a6a4", fontStyle: "italic" }}>
+                      Genesis Block - Initial Chain Anchor
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {block.transactions.map((tx, txIdx) => (
+                        <div
+                          key={txIdx}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: 10,
+                            padding: "10px 14px",
+                            borderRadius: 8,
+                            background: "rgba(159, 208, 202, 0.04)",
+                            border: "1px solid rgba(159, 208, 202, 0.08)",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                            <span
+                              className="badge"
+                              style={{ textTransform: "uppercase", fontWeight: 700, fontSize: 9 }}
+                            >
+                              {tx.stage}
+                            </span>
+                            <div>
+                              <strong style={{ fontSize: 13, color: "#edf4f3" }}>
+                                {tx.drug_name || "Medicine Batch"}
+                              </strong>
+                              <div className="mono" style={{ fontSize: 11, color: "#7ef3cd" }}>
+                                Batch ID: {tx.batch_id}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 11 }}>
+                            <div className="mono" style={{ color: "#91a6a4" }}>
+                              {tx.from_actor} → {tx.to_actor}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenTrace(tx.batch_id)}
+                              className="btn btn-ghost"
+                              style={{ minHeight: 30, padding: "0 12px", fontSize: 11 }}
+                            >
+                              Trace
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </LiquidGlassPanel>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* VERIFY & RECEIVE BATCH MODAL */}
+      {modalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            display: "grid",
+            placeItems: "center",
+            padding: 20,
+            background: "rgba(0, 5, 6, 0.85)",
+            backdropFilter: "blur(10px)",
+          }}
+        >
+          <LiquidGlassPanel
+            className="fade-up"
+            style={{ maxWidth: 640, width: "100%", maxHeight: "90vh", overflowY: "auto", padding: 28 } as any}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                borderBottom: "1px solid rgba(159, 208, 202, 0.12)",
+                paddingBottom: 14,
+                marginBottom: 20,
+              }}
+            >
+              <div>
+                <div className="eyebrow" style={{ color: "#7ef3cd" }}>
+                  <ShieldCheck size={13} style={{ verticalAlign: "-2px" }} /> CUSTODY HANDOFF
+                </div>
+                <h2 style={{ margin: "6px 0 0", fontSize: 20 }}>Verify & Receive Batch</h2>
+              </div>
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  setModalOpen(false);
+                  setSuccessResult(null);
+                }}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Success State */}
+            {successResult ? (
+              <div>
+                <div
+                  style={{
+                    background: "rgba(126, 243, 205, 0.08)",
+                    border: "1px solid rgba(126, 243, 205, 0.4)",
+                    borderRadius: 12,
+                    padding: 20,
+                    marginBottom: 24,
+                    textAlign: "center",
+                  }}
+                >
+                  <CheckCircle2 size={36} color="#7ef3cd" style={{ margin: "0 auto 10px" }} />
+                  <h3 style={{ margin: "0 0 6px", fontSize: 18, color: "#edf4f3" }}>
+                    Custody Verified & Sealed!
+                  </h3>
+                  <p style={{ margin: 0, fontSize: 12, color: "#91a6a4" }}>
+                    A new block has been mined under Proof of Authority to record distributor custody.
+                  </p>
+                  <div
+                    className="mono"
+                    style={{ marginTop: 12, fontSize: 12, color: "#7ef3cd", fontWeight: 700 }}
+                  >
+                    Block Height: #{successResult.blockHeight} · Batch: {successResult.batchId}
+                  </div>
+                </div>
+
+                {/* Next 10-Digit Code for Hospital */}
+                <div
+                  style={{
+                    background: "rgba(159, 208, 202, 0.05)",
+                    border: "1px solid rgba(159, 208, 202, 0.2)",
+                    borderRadius: 12,
+                    padding: 20,
+                    marginBottom: 24,
+                    textAlign: "center",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.08em",
+                      color: "#7ef3cd",
+                      fontWeight: 700,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <Key size={13} style={{ verticalAlign: "-2px" }} /> New 10-Digit Hospital Verification Code
+                  </div>
+                  <div
+                    className="mono"
+                    style={{
+                      fontSize: 32,
+                      letterSpacing: "0.18em",
+                      fontWeight: 800,
+                      color: "#7ef3cd",
+                      userSelect: "all",
+                      margin: "8px 0",
+                    }}
+                  >
+                    {successResult.hospital_verification_code}
+                  </div>
+                  <p style={{ fontSize: 12, color: "#91a6a4", margin: "6px 0 16px" }}>
+                    Provide this 10-digit code to <strong>Hospital A / Pharmacy</strong> to authorize final receipt and purchase.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => copyToClipboard(successResult.hospital_verification_code)}
+                  >
+                    <Copy size={14} />
+                    {copiedHash === successResult.hospital_verification_code ? "Copied!" : "Copy Code for Hospital"}
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      setModalOpen(false);
+                      setSuccessResult(null);
+                    }}
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                {/* Step 1: Batch Search */}
+                <form onSubmit={handleInspectBatch} style={{ marginBottom: 20 }}>
+                  <label style={{ display: "block", fontSize: 11, color: "#91a6a4", marginBottom: 6, fontWeight: 600 }}>
+                    STEP 1: ENTER BATCH ID
+                  </label>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="e.g. BATCH-2026-001"
+                      value={inspectBatchId}
+                      onChange={(e) => setInspectBatchId(e.target.value)}
+                      style={{ flex: 1 }}
+                    />
+                    <button type="submit" className="btn btn-ghost" disabled={inspecting}>
+                      <Search size={14} />
+                      {inspecting ? "Inspecting..." : "Inspect Block"}
+                    </button>
+                  </div>
+                </form>
+
+                {inspectError && (
+                  <div
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: 8,
+                      background: "rgba(255, 100, 100, 0.1)",
+                      border: "1px solid rgba(255, 100, 100, 0.3)",
+                      color: "#ff7b72",
+                      fontSize: 12,
+                      marginBottom: 16,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <AlertCircle size={15} />
+                    {inspectError}
+                  </div>
+                )}
+
+                {/* Inspected Block Details from Manufacturer */}
+                {inspectedBatch && (
+                  <div
+                    className="fade-up"
+                    style={{
+                      background: "rgba(0, 0, 0, 0.25)",
+                      border: "1px solid rgba(159, 208, 202, 0.15)",
+                      borderRadius: 12,
+                      padding: 16,
+                      marginBottom: 20,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <span className="eyebrow" style={{ color: "#7ef3cd" }}>
+                        <CheckCircle2 size={12} /> Manufacturer Block Found
+                      </span>
+                      <span
+                        className="badge"
+                        style={{
+                          textTransform: "uppercase",
+                          color: inspectedBatch.blockchain.current_stage === "mint" ? "#7ef3cd" : "#ffb356",
+                        }}
+                      >
+                        Stage: {inspectedBatch.blockchain.current_stage || "None"}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 12, marginBottom: 12 }}>
+                      <div>
+                        <div style={{ color: "#91a6a4", fontSize: 10 }}>PRODUCT</div>
+                        <strong style={{ color: "#edf4f3" }}>{inspectedBatch.metadata.drug_name}</strong>
+                      </div>
+                      <div>
+                        <div style={{ color: "#91a6a4", fontSize: 10 }}>DOSAGE</div>
+                        <span className="mono" style={{ color: "#edf4f3" }}>{inspectedBatch.metadata.dosage || "Standard"}</span>
+                      </div>
+                      <div>
+                        <div style={{ color: "#91a6a4", fontSize: 10 }}>MANUFACTURER</div>
+                        <span style={{ color: "#edf4f3" }}>{inspectedBatch.metadata.manufacturer}</span>
+                      </div>
+                      <div>
+                        <div style={{ color: "#91a6a4", fontSize: 10 }}>EXPIRY DATE</div>
+                        <span className="mono" style={{ color: "#edf4f3" }}>{inspectedBatch.metadata.expiry_date || "N/A"}</span>
+                      </div>
+                    </div>
+
+                    {inspectedBatch.blockchain.current_stage !== "mint" ? (
+                      <div
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: 6,
+                          background: "rgba(255, 179, 86, 0.1)",
+                          border: "1px solid rgba(255, 179, 86, 0.3)",
+                          color: "#ffb356",
+                          fontSize: 11,
+                        }}
+                      >
+                        This batch is at stage '{inspectedBatch.blockchain.current_stage}'. Only batches in 'mint' stage can be distributed.
+                      </div>
+                    ) : (
+                      /* Step 2: Verification Code Form */
+                      <form onSubmit={handleVerifyAndReceive} style={{ marginTop: 16 }}>
+                        <label style={{ display: "block", fontSize: 11, color: "#91a6a4", marginBottom: 6, fontWeight: 600 }}>
+                          STEP 2: ENTER 10-DIGIT VERIFICATION CODE (FROM MANUFACTURER)
+                        </label>
+                        <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+                          <input
+                            type="text"
+                            maxLength={10}
+                            className="input mono"
+                            placeholder="e.g. 5829104921"
+                            value={verificationCode}
+                            onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ""))}
+                            style={{ flex: 1, letterSpacing: "0.15em", fontSize: 16, fontWeight: 700 }}
+                          />
+                        </div>
+
+                        {actionError && (
+                          <div
+                            style={{
+                              padding: "8px 12px",
+                              borderRadius: 6,
+                              background: "rgba(255, 100, 100, 0.1)",
+                              border: "1px solid rgba(255, 100, 100, 0.3)",
+                              color: "#ff7b72",
+                              fontSize: 12,
+                              marginBottom: 12,
+                            }}
+                          >
+                            {actionError}
+                          </div>
+                        )}
+
+                        <button
+                          type="submit"
+                          className="btn btn-primary full"
+                          disabled={submitting || verificationCode.length !== 10}
+                        >
+                          <ShieldCheck size={15} />
+                          {submitting ? "Signing & Mining Block..." : "Verify Code & Seal Custody Block"}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </LiquidGlassPanel>
+        </div>
+      )}
+
+      {/* TRACE MODAL */}
+      {traceModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            display: "grid",
+            placeItems: "center",
+            padding: 20,
+            background: "rgba(0, 5, 6, 0.78)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <LiquidGlassPanel
+            className="fade-up"
+            style={{ maxWidth: 600, width: "100%", maxHeight: "90vh", overflowY: "auto" } as any}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                borderBottom: "1px solid rgba(159, 208, 202, 0.12)",
+                paddingBottom: 14,
+                marginBottom: 16,
+              }}
+            >
+              <div>
+                <div className="eyebrow">BLOCKCHAIN AUDIT TRAIL</div>
+                <h2 style={{ margin: "4px 0 0", fontSize: 18 }}>Batch Trace: {selectedBatchId}</h2>
+              </div>
+              <button className="icon-btn" onClick={() => setTraceModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            {traceLoading ? (
+              <div style={{ textAlign: "center", padding: 30, color: "#91a6a4" }}>Loading trace...</div>
+            ) : traceError ? (
+              <div style={{ padding: 14, color: "#ff7b72" }}>{traceError}</div>
+            ) : batchDetail ? (
+              <div>
+                <div style={{ marginBottom: 16, fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <div style={{ color: "#91a6a4", fontSize: 10 }}>MEDICINE</div>
+                    <strong>{batchDetail.metadata.drug_name}</strong>
+                  </div>
+                  <div>
+                    <div style={{ color: "#91a6a4", fontSize: 10 }}>DOSAGE</div>
+                    <span className="mono">{batchDetail.metadata.dosage || "Standard"}</span>
+                  </div>
+                </div>
+
+                <div className="timeline" style={{ marginTop: 16 }}>
+                  {batchDetail.blockchain.history.map((tx, idx) => (
+                    <div key={idx} className="timeline-item">
+                      <div className="timeline-dot" />
+                      <div className="timeline-top">
+                        <span className="timeline-title" style={{ textTransform: "uppercase" }}>
+                          Stage: {tx.stage}
+                        </span>
+                        <span className="timeline-time">{formatDate(tx.timestamp)}</span>
+                      </div>
+                      <div className="timeline-copy">
+                        From: <span className="mono">{tx.from_actor}</span> → To: <span className="mono">{tx.to_actor}</span>
+                        {tx.block_hash && (
+                          <div className="mono" style={{ fontSize: 10, color: "#7ef3cd", marginTop: 4 }}>
+                            Block #{tx.block_index}: {tx.block_hash.slice(0, 18)}...
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </LiquidGlassPanel>
+        </div>
+      )}
+    </DashboardLayout>
+  );
+}

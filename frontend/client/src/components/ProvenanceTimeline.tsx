@@ -1,4 +1,53 @@
 import { Check, Factory, Pill, Truck } from "lucide-react";
-const iconFor = (type: string) => type === "manufacturer" ? <Factory size={15} /> : type === "distributor" ? <Truck size={15} /> : <Pill size={15} />;
-const steps = [{ type: "manufacturer", title: "Batch minted", actor: "Helix Biologics · plant IN-04", time: "18 Aug 2024 · 09:42", copy: "Manufacturing record committed with 24,000 units and a 24-month shelf life.", hash: "0x8a3f...91c2" }, { type: "distributor", title: "Distribution handoff", actor: "Northstar Logistics · route BLR → MAA", time: "19 Aug 2024 · 14:18", copy: "Temperature envelope verified. Shipment moved into monitored transit custody.", hash: "0xb127...5ee4" }, { type: "pharmacy", title: "Purchase received", actor: "St. Catherine Medical Center", time: "21 Aug 2024 · 11:06", copy: "Inbound units reconciled with purchase order and cold-chain receipt.", hash: "0xf492...10ab" }];
-export default function ProvenanceTimeline() { return <div className="timeline">{steps.map((step) => <div className="timeline-item" key={step.title}><div className="timeline-dot" /><div className="timeline-top"><span className="timeline-title">{iconFor(step.type)} {step.title}</span><span className="timeline-time">{step.time}</span></div><div className="timeline-copy">{step.actor}<br />{step.copy}</div><span className="timeline-hash"><Check size={11} style={{ verticalAlign: "-2px" }} /> {step.hash}</span></div>)}</div>; }
+
+interface TimelineEvent {
+  stage?: string;
+  from_actor?: string;
+  to_actor?: string;
+  timestamp?: number;
+  block_index?: number;
+  block_hash?: string;
+}
+
+const iconFor = (stage?: string) => {
+  if (stage === "mint") return <Factory size={15} />;
+  if (stage === "distribute") return <Truck size={15} />;
+  return <Pill size={15} />;
+};
+
+export default function ProvenanceTimeline({ events = [] }: { events?: TimelineEvent[] }) {
+  if (events.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "20px", color: "#91a6a4", fontSize: 12 }}>
+        No custody events recorded on blockchain yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="timeline">
+      {events.map((ev, idx) => (
+        <div className="timeline-item" key={idx}>
+          <div className="timeline-dot" />
+          <div className="timeline-top">
+            <span className="timeline-title">
+              {iconFor(ev.stage)} Stage: {ev.stage?.toUpperCase() || "RECORDED"}
+            </span>
+            <span className="timeline-time">
+              {ev.timestamp ? new Date(ev.timestamp > 1e11 ? ev.timestamp : ev.timestamp * 1000).toLocaleString() : "N/A"}
+            </span>
+          </div>
+          <div className="timeline-copy">
+            From: <span className="mono">{ev.from_actor}</span> → To: <span className="mono">{ev.to_actor}</span>
+            {ev.block_index !== undefined && <span> (Block #{ev.block_index})</span>}
+          </div>
+          {ev.block_hash && (
+            <span className="timeline-hash mono">
+              <Check size={11} style={{ verticalAlign: "-2px" }} /> {ev.block_hash.slice(0, 16)}...
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}

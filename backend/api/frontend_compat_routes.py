@@ -1,5 +1,6 @@
 from datetime import date
 from pathlib import Path
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -10,7 +11,7 @@ from blockchain.chain import blockchain
 from blockchain.crypto_utils import load_private_key
 from blockchain.transaction import Transaction, validate_stage_order
 from db.database import get_db
-from db.models import MedicineMetadata
+from db.models import BatchVerification, MedicineMetadata
 
 router = APIRouter(tags=["Frontend Compatibility"])
 
@@ -91,8 +92,23 @@ async def compat_mint(
     )
     tx.sign(private_key)
 
+    if not tx.verify():
+        raise HTTPException(status_code=400, detail="Signature verification failed.")
+
     validator = blockchain.consensus.get_expected_validator(len(blockchain.chain))
     block = blockchain.add_block(validator, [tx], db=db)
+
+    # Generate a unique 10-digit numeric proof of transaction code for distributor handoff
+    distributor_code = str(secrets.randbelow(9000000000) + 1000000000)
+    db.add(
+        BatchVerification(
+            batch_id=batch_id,
+            stage="distribute",
+            code=distributor_code,
+            is_used=False
+        )
+    )
+    db.commit()
 
     return {
         "success": True,
@@ -102,9 +118,10 @@ async def compat_mint(
         "blockHash": block.hash,
         "previousHash": block.previous_hash,
         "validator": block.validator,
-        "timestamp": block.timestamp
+        "timestamp": block.timestamp,
+        "verification_code": distributor_code,
+        "stage": "mint"
     }
-
 
 
 @router.post("/batches/distribution")
@@ -114,34 +131,51 @@ async def compat_distribute(
     user=Depends(get_current_user)
 ):
     body = await request.json()
-    batch_id = body.get("batchId") or body.get("batch_id") or "B001"
+    batch_id = str(body.get("batchId") or body.get("batch_id") or "").strip()
+    verification_code = str(body.get("verification_code") or body.get("verificationCode") or body.get("code") or "").strip()
     price = float(body.get("price", 125.0))
+
+    if not batch_id:
+        raise HTTPException(status_code=400, detail="Batch ID is required.")
+
+    if not verification_code:
+        raise HTTPException(
+            status_code=400,
+            detail="10-digit proof of transaction verification code from Manufacturer is required."
+        )
 
     medicine = db.query(MedicineMetadata).filter(MedicineMetadata.batch_id == batch_id).first()
     if not medicine:
-        # If not already minted, mint first so demonstration succeeds smoothly
-        await compat_mint(request, db, user)
-        medicine = db.query(MedicineMetadata).filter(MedicineMetadata.batch_id == batch_id).first()
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found in registry.")
 
     state = blockchain.get_batch_state(batch_id)
-    if state.get("stage") is None:
-        # Auto-mint if demonstration needs it
-        key_path_m = Path(__file__).resolve().parent.parent / "keys" / "manu_a_private.pem"
-        tx_m = Transaction(
-            batch_id=batch_id,
-            drug_name=medicine.drug_name,
-            from_actor="manu_a",
-            to_actor="manu_a",
-            price=100.0,
-            stage="mint",
-            actor_public_key=user.public_key
+    current_stage = state.get("stage")
+
+    if current_stage is None:
+        raise HTTPException(status_code=400, detail=f"Batch '{batch_id}' has not been minted yet.")
+
+    if current_stage != "mint":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch '{batch_id}' is at stage '{current_stage}' and cannot be distributed. Must be in 'mint' stage."
         )
-        tx_m.sign(load_private_key(key_path_m))
-        val_m = blockchain.consensus.get_expected_validator(len(blockchain.chain))
-        blockchain.add_block(val_m, [tx_m], db=db)
-        state = blockchain.get_batch_state(batch_id)
+
+    # Verify 10-digit code generated during minting
+    v_record = db.query(BatchVerification).filter(
+        BatchVerification.batch_id == batch_id,
+        BatchVerification.stage == "distribute",
+        BatchVerification.is_used == False
+    ).order_by(BatchVerification.id.desc()).first()
+
+    if not v_record or v_record.code != verification_code:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid 10-digit verification code. Custody transfer rejected."
+        )
 
     key_path = Path(__file__).resolve().parent.parent / "keys" / "dist_a_private.pem"
+    if not key_path.exists():
+        raise HTTPException(status_code=500, detail="Distributor private key not found on server.")
     private_key = load_private_key(key_path)
 
     tx = Transaction(
@@ -155,15 +189,41 @@ async def compat_distribute(
     )
     tx.sign(private_key)
 
+    if not tx.verify():
+        raise HTTPException(status_code=400, detail="Digital signature verification failed.")
+
+    if not validate_stage_order(tx, blockchain):
+        raise HTTPException(status_code=400, detail="Invalid stage progression for this batch.")
+
     validator = blockchain.consensus.get_expected_validator(len(blockchain.chain))
     block = blockchain.add_block(validator, [tx], db=db)
 
+    # Mark distributor verification code as consumed
+    v_record.is_used = True
+
+    # Generate next 10-digit verification code for Hospital handoff
+    hospital_code = str(secrets.randbelow(9000000000) + 1000000000)
+    db.add(
+        BatchVerification(
+            batch_id=batch_id,
+            stage="purchase",
+            code=hospital_code,
+            is_used=False
+        )
+    )
+    db.commit()
+
     return {
         "success": True,
-        "message": "Distribution sealed successfully.",
+        "message": "Distribution sealed successfully with digital signature.",
         "batchId": batch_id,
         "blockHeight": block.index,
-        "blockHash": block.hash
+        "blockHash": block.hash,
+        "previousHash": block.previous_hash,
+        "validator": block.validator,
+        "timestamp": block.timestamp,
+        "stage": "distribute",
+        "hospital_verification_code": hospital_code
     }
 
 
@@ -174,18 +234,48 @@ async def compat_purchase(
     user=Depends(get_current_user)
 ):
     body = await request.json()
-    batch_id = body.get("batchId") or body.get("batch_id") or "B001"
+    batch_id = str(body.get("batchId") or body.get("batch_id") or "").strip()
+    verification_code = str(body.get("verification_code") or body.get("verificationCode") or body.get("code") or "").strip()
     price = float(body.get("price", 150.0))
+
+    if not batch_id:
+        raise HTTPException(status_code=400, detail="Batch ID is required.")
+
+    if not verification_code:
+        raise HTTPException(
+            status_code=400,
+            detail="10-digit proof of transaction verification code from Distributor is required."
+        )
 
     medicine = db.query(MedicineMetadata).filter(MedicineMetadata.batch_id == batch_id).first()
     if not medicine:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found in registry.")
 
     state = blockchain.get_batch_state(batch_id)
-    if state.get("stage") == "purchase":
-        raise HTTPException(status_code=400, detail="Batch already purchased.")
+    current_stage = state.get("stage")
+
+    if current_stage != "distribute":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch '{batch_id}' is currently at stage '{current_stage}'. Only batches in 'distribute' stage can be purchased/dispensed."
+        )
+
+    # Verify 10-digit code generated during distribution
+    v_record = db.query(BatchVerification).filter(
+        BatchVerification.batch_id == batch_id,
+        BatchVerification.stage == "purchase",
+        BatchVerification.is_used == False
+    ).order_by(BatchVerification.id.desc()).first()
+
+    if not v_record or v_record.code != verification_code:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid 10-digit verification code from Distributor. Purchase rejected."
+        )
 
     key_path = Path(__file__).resolve().parent.parent / "keys" / "hosp_a_private.pem"
+    if not key_path.exists():
+        raise HTTPException(status_code=500, detail="Hospital private key not found on server.")
     private_key = load_private_key(key_path)
 
     tx = Transaction(
@@ -199,15 +289,65 @@ async def compat_purchase(
     )
     tx.sign(private_key)
 
+    if not tx.verify():
+        raise HTTPException(status_code=400, detail="Digital signature verification failed.")
+
+    if not validate_stage_order(tx, blockchain):
+        raise HTTPException(status_code=400, detail="Invalid stage progression for this batch.")
+
     validator = blockchain.consensus.get_expected_validator(len(blockchain.chain))
     block = blockchain.add_block(validator, [tx], db=db)
 
+    # Mark hospital verification code as consumed
+    v_record.is_used = True
+    db.commit()
+
     return {
         "success": True,
-        "message": "Purchase verified and recorded on chain.",
+        "message": "Purchase verified and recorded on blockchain.",
         "batchId": batch_id,
         "blockHeight": block.index,
-        "blockHash": block.hash
+        "blockHash": block.hash,
+        "previousHash": block.previous_hash,
+        "validator": block.validator,
+        "timestamp": block.timestamp,
+        "stage": "purchase"
+    }
+
+
+@router.get("/batches/{batch_id}/verification-code")
+def get_verification_code(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user)
+):
+    state = blockchain.get_batch_state(batch_id)
+    current_stage = state.get("stage")
+    if not current_stage:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found on blockchain.")
+
+    target_stage = "distribute" if current_stage == "mint" else "purchase" if current_stage == "distribute" else None
+    if not target_stage:
+        return {
+            "batch_id": batch_id,
+            "code": None,
+            "stage": current_stage,
+            "is_final": True,
+            "message": "Batch has completed its full lifecycle (dispensed/purchased)."
+        }
+
+    v_record = db.query(BatchVerification).filter(
+        BatchVerification.batch_id == batch_id,
+        BatchVerification.stage == target_stage,
+        BatchVerification.is_used == False
+    ).order_by(BatchVerification.id.desc()).first()
+
+    return {
+        "batch_id": batch_id,
+        "code": v_record.code if v_record else None,
+        "target_stage": target_stage,
+        "current_stage": current_stage,
+        "is_final": False
     }
 
 
@@ -225,6 +365,7 @@ def compat_history(batch_id: str, db: Session = Depends(get_db)):
             "dosage": medicine.dosage if medicine else "Standard",
             "composition": medicine.composition if medicine else "",
             "expiryDate": medicine.expiry_date.isoformat() if medicine and medicine.expiry_date else None,
+            "manufacturingDate": medicine.manufacturing_date.isoformat() if medicine and medicine.manufacturing_date else None,
         },
         "currentStage": state.get("stage"),
         "currentOwner": state.get("owner"),
@@ -260,7 +401,6 @@ def compat_search(
             "id": med.batch_id,
             "name": med.drug_name,
             "maker": med.manufacturer,
-            "country": "India",
             "status": "verified" if state.get("stage") else "registered",
             "stage": state.get("stage")
         })
