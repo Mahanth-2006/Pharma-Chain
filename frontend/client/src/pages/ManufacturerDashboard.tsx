@@ -102,13 +102,27 @@ export default function ManufacturerDashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
-  // Blockchain Explorer State (Read-Only)
-  const [chain, setChain] = useState<BlockData[]>([]);
+  // Blockchain Explorer State (Read-Only) with local storage persistence
+  const [chain, setChain] = useState<BlockData[]>(() => {
+    try {
+      const cached = localStorage.getItem("pharma_chain_cache");
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [chainValid, setChainValid] = useState<boolean>(true);
   const [loadingChain, setLoadingChain] = useState<boolean>(false);
 
-  // Real Batches State
-  const [batches, setBatches] = useState<BatchRecord[]>([]);
+  // Real Batches State with local storage persistence
+  const [batches, setBatches] = useState<BatchRecord[]>(() => {
+    try {
+      const cached = localStorage.getItem("pharma_batches_cache");
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [loadingBatches, setLoadingBatches] = useState<boolean>(false);
 
   // Trace Popup State
@@ -160,12 +174,18 @@ export default function ManufacturerDashboard() {
         }),
       ]);
 
-      if (chainRes) {
-        setChain(chainRes.chain || []);
+      if (chainRes && Array.isArray(chainRes.chain)) {
+        setChain(chainRes.chain);
         setChainValid(chainRes.is_valid);
+        try {
+          localStorage.setItem("pharma_chain_cache", JSON.stringify(chainRes.chain));
+        } catch {}
       }
-      if (batchesRes) {
-        setBatches(batchesRes.batches || []);
+      if (batchesRes && Array.isArray(batchesRes.batches)) {
+        setBatches(batchesRes.batches);
+        try {
+          localStorage.setItem("pharma_batches_cache", JSON.stringify(batchesRes.batches));
+        } catch {}
       }
     } finally {
       setLoadingChain(false);

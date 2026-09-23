@@ -1,8 +1,3 @@
-"""
-seed.py
-
-Seeds canonical demo participants with custom passwords and 20 realistic demo medicines.
-"""
 
 import os
 import sys
@@ -84,10 +79,7 @@ def seed():
             existing.password_hash = pwd.hash(password)
             existing.public_key = public
 
-    # Remove all leftover fake/demo batches (B001-B020) so only user-created data exists
-    db.query(MedicineMetadata).filter(MedicineMetadata.batch_id.like("B0%")).delete(synchronize_session=False)
 
-    db.commit()
     db.close()
 
     print("Participants verified and updated. Cleaned demo data; only user batches will be stored.")

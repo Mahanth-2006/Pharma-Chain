@@ -1,5 +1,4 @@
 """
-crypto_utils.py
 
 Utility functions for RSA key generation, transaction signing,
 and signature verification.
@@ -16,8 +15,6 @@ def generate_key_pair():
     """
     Generates a 2048-bit RSA key pair.
 
-    Returns:
-        (private_key_pem, public_key_pem)
     """
 
     private_key = rsa.generate_private_key(
@@ -45,12 +42,6 @@ def sign_data(private_key_pem: str, message: str) -> str:
     """
     Signs a message using the private key.
 
-    Args:
-        private_key_pem: PEM-formatted private key.
-        message: String to sign.
-
-    Returns:
-        Base64-encoded signature.
     """
 
     private_key = serialization.load_pem_private_key(
@@ -74,13 +65,6 @@ def verify_signature(public_key_pem: str, message: str, signature: str) -> bool:
     """
     Verifies a digital signature.
 
-    Args:
-        public_key_pem: PEM-formatted public key.
-        message: Original message.
-        signature: Base64-encoded signature.
-
-    Returns:
-        True if valid, False otherwise.
     """
 
     public_key = serialization.load_pem_public_key(
@@ -119,4 +103,4 @@ def get_public_key_from_private(private_key_pem: str) -> str:
     return public_key.public_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
-    ).decode()
+    ).decode()

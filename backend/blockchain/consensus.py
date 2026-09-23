@@ -27,11 +27,6 @@ class ProofOfAuthority:
         """
         Returns the validator whose turn it is for the given block index.
 
-        Args:
-            block_index: Index of the block being created.
-
-        Returns:
-            Validator ID.
         """
         if block_index <= 0:
             return "GENESIS"
@@ -42,12 +37,6 @@ class ProofOfAuthority:
         """
         Checks whether the supplied validator is allowed to seal this block.
 
-        Args:
-            block_index: Block index.
-            validator: Validator attempting block creation.
-
-        Returns:
-            True if allowed, False otherwise.
         """
         if block_index == 0:
             return validator == "GENESIS"

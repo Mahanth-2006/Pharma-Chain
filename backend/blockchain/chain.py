@@ -1,6 +1,4 @@
 """
-chain.py
-
 Manages the Pharma-Chain blockchain.
 
 Responsibilities:
@@ -91,7 +89,6 @@ class Blockchain:
     def add_block(self, validator: str, transactions: list, db=None) -> Block:
         """
         Adds a new block after PoA and transaction signature verification.
-        Optionally persists the block to PostgreSQL snapshot.
         """
         latest = self.get_latest_block()
         next_index = latest.index + 1
@@ -247,3 +244,12 @@ blockchain = Blockchain(
         "hosp_a"
     ]
 )
+
+# Auto-restore on startup from database snapshot if database is reachable
+try:
+    from db.database import SessionLocal
+    _init_db = SessionLocal()
+    blockchain.load_chain_from_db(_init_db)
+    _init_db.close()
+except Exception as _e:
+    pass
